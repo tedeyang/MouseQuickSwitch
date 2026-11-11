@@ -89,6 +89,12 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     private let defaults = UserDefaults.standard
     private let monitor = MouseMonitor()
+    private let keyboardMonitor = KeyboardMonitor()
+    private let keyboardState = KeyboardSetupState()
+    private var keyboardWindow: NSWindow?
+    private var keyboardPermissionTimer: Timer?
+    private var recordingKeyUp: Int?
+    private var activeKeyboardRemaps: [Int: Int] = [:]
     private var statusItem: NSStatusItem!
     private var menu = NSMenu()
     private var setupWindow: NSWindow?
@@ -123,20 +129,33 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.delegate = self
         monitor.onButton = { [weak self] number in self?.handleButton(number) ?? false }
         monitor.onButtonObserved = { [weak self] number in self?.observeButton(number) }
+        keyboardMonitor.onKey = { [weak self] type, event in
+            self?.handleKey(type, event) ?? false
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(systemSettingsDidDeactivate(_:)),
             name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         _ = monitor.start()
+        loadKeyboardSettings()
+        if keyboardState.enabled { _ = keyboardMonitor.start() }
+        refreshKeyboardSetup()
         rebuildMenu()
         if buttonNumber == nil || defaults.bool(forKey: "resumeSetupAfterAccess") {
             DispatchQueue.main.async { self.showSetup() }
         }
+        if defaults.bool(forKey: "resumeKeyboardSetupAfterAccess") {
+            DispatchQueue.main.async { self.showKeyboardSetup() }
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard defaults.bool(forKey: "resumeSetupAfterAccess"),
-              setupWindow?.isVisible == false else { return }
-        showSetup()
+        if defaults.bool(forKey: "resumeKeyboardSetupAfterAccess"),
+           keyboardWindow?.isVisible == false {
+            showKeyboardSetup()
+        } else if defaults.bool(forKey: "resumeSetupAfterAccess"),
+                  setupWindow?.isVisible == false {
+            showSetup()
+        }
     }
 
     private func menuBarIcon() -> NSImage {
@@ -174,6 +193,10 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         if !monitor.isRunning { _ = monitor.start() }
+        if keyboardState.enabled && !keyboardMonitor.isRunning {
+            _ = keyboardMonitor.start()
+            refreshKeyboardSetup()
+        }
         rebuildMenu()
     }
 
@@ -240,41 +263,73 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         let title = version.map { "MouseQuickSwitch v\($0)" } ?? "MouseQuickSwitch"
         addItem(title, action: nil).isEnabled = false
         menu.addItem(.separator())
-        let setup = addItem(tr("Set Up Mouse Button…", "设置鼠标按键…"),
-                            action: #selector(showSetupFromMenu))
-        setup.image = NSImage(systemSymbolName: "cursorarrow.click.2", accessibilityDescription: nil)
+
+        addItem(tr("Mouse Button", "鼠标按键"), action: nil).isEnabled = false
+        addItem(tr("Set Up Mouse Button…", "设置鼠标按键…"),
+                action: #selector(showSetupFromMenu)).indentationLevel = 1
+        let buttonDescription = recording ? tr("Press a side button now…", "请按下要使用的侧键…") :
+            (buttonNumber.map { tr("Button \($0 + 1) selected", "已选择侧键 \($0 + 1)") } ??
+                tr("No button selected", "尚未选择按键"))
+        let buttonStatus = addItem(buttonDescription, action: nil)
+        buttonStatus.isEnabled = false
+        buttonStatus.indentationLevel = 1
+        if recording {
+            addItem(tr("Cancel Recording", "取消录制"),
+                    action: #selector(toggleRecording)).indentationLevel = 1
+        }
         if !monitor.isRunning {
             let hasAccessibility = AXIsProcessTrusted()
-            addItem(hasAccessibility ? tr("Mouse access needed", "需要鼠标权限") :
-                        tr("Accessibility access needed", "需要辅助功能权限"),
-                    action: nil).isEnabled = false
             addItem(hasAccessibility ? tr("Request Mouse Input Access…", "请求鼠标输入权限…") :
                         tr("Grant Accessibility Access…", "授予辅助功能权限…"),
-                    action: #selector(requestAccess))
+                    action: #selector(requestAccess)).indentationLevel = 1
         }
-        let description = recording ? tr("Press a side button now…", "请按下要使用的侧键…") :
-            (buttonNumber.map { tr("Using button \($0 + 1)", "正在使用侧键 \($0 + 1)") } ??
-                tr("No side button set", "尚未设置侧键"))
-        addItem(description, action: nil).isEnabled = false
-        if recording {
-            addItem(tr("Cancel Recording", "取消录制"), action: #selector(toggleRecording))
-        }
-        menu.addItem(.separator())
-        addItem(tr("When I Press It", "按下侧键后"), action: nil).isEnabled = false
+        let actionTitle = actionMode == .commandTab
+            ? tr("Action: Previous App", "动作：切换到上一个程序")
+            : tr("Action: Chosen App", "动作：切换到指定程序")
+        let actionMenuItem = addItem(actionTitle, action: nil)
+        actionMenuItem.indentationLevel = 1
+        let actionMenu = NSMenu()
         let commandTab = addItem(tr("Switch to Previous App (⌘Tab)", "切换到上一个程序（⌘Tab）"),
-                                 action: #selector(selectCommandTabMode))
+                                 action: #selector(selectCommandTabMode), to: actionMenu)
         commandTab.state = actionMode == .commandTab ? .on : .off
         let selectedApp = addItem(tr("Switch to a Chosen App", "切换到指定程序"),
-                                  action: #selector(selectApplicationMode))
+                                  action: #selector(selectApplicationMode), to: actionMenu)
         selectedApp.state = actionMode == .selectedApplication ? .on : .off
-        menu.addItem(.separator())
+        actionMenuItem.submenu = actionMenu
         if actionMode == .selectedApplication {
             let target = appURL?.lastPathComponent ?? tr("None", "未选择")
-            addItem(tr("Chosen app: \(target)", "指定应用：\(target)"), action: nil).isEnabled = false
-            addItem(tr("Choose App…", "选择应用…"), action: #selector(selectApplication))
+            let targetItem = addItem(tr("Chosen app: \(target)", "指定程序：\(target)"), action: nil)
+            targetItem.isEnabled = false
+            targetItem.indentationLevel = 1
+            addItem(tr("Choose App…", "选择程序…"),
+                    action: #selector(selectApplication)).indentationLevel = 1
         }
         let mapping = addItem(tr("Enable Side Button Action", "启用侧键功能"), action: #selector(toggleEnabled))
         mapping.state = enabled ? .on : .off
+        mapping.indentationLevel = 1
+
+        menu.addItem(.separator())
+        addItem(tr("Keyboard Mappings", "键盘映射"), action: nil).isEnabled = false
+        addItem(tr("Set Up Keyboard Keys…", "设置键盘按键…"),
+                action: #selector(showKeyboardSetupFromMenu)).indentationLevel = 1
+        let configuredCount = keyboardState.mappings.filter {
+            $0.source != nil && $0.target != nil
+        }.count
+        let keyboardSummary = keyboardState.appName.map {
+            tr("\($0): \(configuredCount) mappings", "\($0)：已设置 \(configuredCount) 组")
+        } ?? tr("No app selected", "尚未选择目标程序")
+        let keyboardStatus = addItem(keyboardSummary, action: nil)
+        keyboardStatus.isEnabled = false
+        keyboardStatus.indentationLevel = 1
+        let keyboardToggle = addItem(tr("Enable Keyboard Mappings", "启用键盘映射"),
+                                     action: #selector(toggleKeyboardFromMenu))
+        keyboardToggle.state = keyboardState.enabled ? .on : .off
+        keyboardToggle.indentationLevel = 1
+        if keyboardState.enabled && !keyboardMonitor.isRunning {
+            let access = addItem(tr("Keyboard access required", "需要键盘输入权限"), action: nil)
+            access.isEnabled = false
+            access.indentationLevel = 1
+        }
         menu.addItem(.separator())
         addLanguageMenu()
         menu.addItem(.separator())
@@ -299,10 +354,10 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     @discardableResult
-    private func addItem(_ title: String, action: Selector?) -> NSMenuItem {
+    private func addItem(_ title: String, action: Selector?, to parent: NSMenu? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
-        menu.addItem(item)
+        (parent ?? menu).addItem(item)
         return item
     }
 
@@ -406,11 +461,262 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc private func showSetupFromMenu() { showSetup() }
 
+    @objc private func showKeyboardSetupFromMenu() { showKeyboardSetup() }
+
+    @objc private func toggleKeyboardFromMenu() {
+        if !keyboardState.enabled &&
+           (keyboardState.appName == nil ||
+            !keyboardState.mappings.contains(where: { $0.source != nil && $0.target != nil })) {
+            showKeyboardSetup()
+            keyboardState.feedback = tr("Choose an app and record both keys first.",
+                                        "请先选择程序并录制一组完整的按键。")
+            return
+        }
+        if !keyboardState.enabled && !keyboardMonitor.start() {
+            showKeyboardSetup()
+            return
+        }
+        refreshKeyboardSetup()
+        toggleKeyboardMappings()
+        rebuildMenu()
+    }
+
+    private func loadKeyboardSettings() {
+        if let data = defaults.data(forKey: "keyboardMappings"),
+           let mappings = try? JSONDecoder().decode([KeyMapping].self, from: data) {
+            keyboardState.mappings = Array(mappings.prefix(3))
+            while keyboardState.mappings.count < 3 {
+                keyboardState.mappings.append(KeyMapping())
+            }
+            keyboardState.visibleRows = max(
+                1, (keyboardState.mappings.lastIndex(where: {
+                    $0.source != nil || $0.target != nil
+                }) ?? 0) + 1)
+        }
+        keyboardState.appName = defaults.string(forKey: "keyboardAppPath")
+            .map { URL(fileURLWithPath: $0).lastPathComponent }
+        keyboardState.enabled = defaults.bool(forKey: "keyboardEnabled")
+    }
+
+    private func saveKeyboardMappings() {
+        guard let data = try? JSONEncoder().encode(keyboardState.mappings) else { return }
+        defaults.set(data, forKey: "keyboardMappings")
+    }
+
+    private func refreshKeyboardSetup() {
+        keyboardState.chinese = language == .chinese
+        keyboardState.canListen = keyboardMonitor.isRunning
+    }
+
+    private func showKeyboardSetup() {
+        if !keyboardMonitor.isRunning { _ = keyboardMonitor.start() }
+        refreshKeyboardSetup()
+        if keyboardWindow == nil {
+            let view = KeyboardSetupView(
+                state: keyboardState,
+                chooseApp: { [weak self] in self?.chooseKeyboardApp() },
+                record: { [weak self] index, target in self?.recordKeyboardKey(index, target: target) },
+                clear: { [weak self] index in self?.clearKeyboardMapping(index) },
+                toggle: { [weak self] in self?.toggleKeyboardMappings() },
+                requestAccess: { [weak self] in self?.requestKeyboardAccess() })
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
+                                  styleMask: [.titled, .closable, .resizable],
+                                  backing: .buffered, defer: false)
+            window.title = tr("Keyboard Key Mappings", "键盘按键映射")
+            window.contentView = NSHostingView(rootView: view)
+            window.center()
+            window.isReleasedWhenClosed = false
+            window.hidesOnDeactivate = false
+            window.delegate = self
+            keyboardWindow = window
+        }
+        keyboardWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func chooseKeyboardApp() {
+        keyboardState.recordingIndex = nil
+        let panel = NSOpenPanel()
+        panel.title = tr("Choose App for Keyboard Mappings", "选择键盘映射生效的程序")
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        defaults.set(url.path, forKey: "keyboardAppPath")
+        defaults.set(Bundle(url: url)?.bundleIdentifier, forKey: "keyboardAppID")
+        keyboardState.appName = url.lastPathComponent
+        keyboardState.feedback = tr("Keyboard mappings will work in \(url.lastPathComponent).",
+                                    "键盘映射只在 \(url.lastPathComponent) 中生效。")
+    }
+
+    private func recordKeyboardKey(_ index: Int, target: Bool) {
+        guard keyboardMonitor.start() else {
+            requestKeyboardAccess()
+            return
+        }
+        keyboardState.recordingIndex = index
+        keyboardState.recordingTarget = target
+        keyboardState.feedback = target
+            ? tr("Press the key to send.", "请按要输出的目标键。")
+            : tr("Press the key to replace.", "请按要替换的源按键。")
+    }
+
+    private func clearKeyboardMapping(_ index: Int) {
+        keyboardState.mappings[index] = KeyMapping()
+        keyboardState.recordingIndex = nil
+        saveKeyboardMappings()
+        keyboardState.feedback = tr("Mapping \(index + 1) cleared.", "已清除映射 \(index + 1)。")
+    }
+
+    private func toggleKeyboardMappings() {
+        let hasCompleteMapping = keyboardState.mappings.contains {
+            $0.source != nil && $0.target != nil
+        }
+        guard keyboardState.enabled ||
+              (keyboardState.appName != nil && hasCompleteMapping && keyboardMonitor.isRunning) else {
+            keyboardState.feedback = tr("Choose an app and record both keys first.",
+                                        "请先选择程序并录制一组完整的按键。")
+            return
+        }
+        keyboardState.enabled.toggle()
+        defaults.set(keyboardState.enabled, forKey: "keyboardEnabled")
+        rebuildMenu()
+        keyboardState.feedback = keyboardState.enabled
+            ? tr("Keyboard mappings enabled.", "已启用键盘映射。")
+            : tr("Keyboard mappings paused.", "已暂停键盘映射。")
+    }
+
+    private func requestKeyboardAccess() {
+        showKeyboardSetup()
+        defaults.set(true, forKey: "resumeKeyboardSetupAfterAccess")
+        keyboardState.feedback = tr("Grant access in System Settings, then return here.",
+                                    "请在系统设置中授权，然后回到这里继续。")
+        if !AXIsProcessTrusted() {
+            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        } else {
+            _ = CGRequestListenEventAccess()
+        }
+        keyboardPermissionTimer?.invalidate()
+        keyboardPermissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+            guard let self, self.keyboardWindow?.isVisible == true else {
+                timer.invalidate()
+                return
+            }
+            if !self.keyboardMonitor.isRunning { _ = self.keyboardMonitor.start() }
+            self.refreshKeyboardSetup()
+            if self.keyboardMonitor.isRunning {
+                self.keyboardState.feedback = self.tr("Keyboard access is ready. Record your keys.",
+                                                      "键盘权限已就绪，可以录制按键。")
+                timer.invalidate()
+                self.keyboardPermissionTimer = nil
+            }
+        }
+    }
+
+    private func handleKey(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        guard type == .keyDown || type == .keyUp,
+              event.getIntegerValueField(.eventSourceUserData) != 0x4D51534B else { return false }
+        let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        if type == .keyUp, recordingKeyUp == code {
+            recordingKeyUp = nil
+            return true
+        }
+        if type == .keyDown, let index = keyboardState.recordingIndex {
+            let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+            guard event.flags.intersection(modifiers).isEmpty else { return false }
+            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return true }
+            let target = keyboardState.recordingTarget
+            let other = target ? keyboardState.mappings[index].source : keyboardState.mappings[index].target
+            guard other != code else {
+                keyboardState.feedback = tr("Choose two different keys.", "源按键和目标按键不能相同。")
+                return true
+            }
+            if !target && keyboardState.mappings.enumerated().contains(where: {
+                $0.offset != index && $0.element.source == code
+            }) {
+                keyboardState.feedback = tr("This source key is already mapped.", "这个源按键已用于另一组映射。")
+                return true
+            }
+            let name = keyName(code, event: event)
+            if target {
+                keyboardState.mappings[index].target = code
+                keyboardState.mappings[index].targetName = name
+            } else {
+                keyboardState.mappings[index].source = code
+                keyboardState.mappings[index].sourceName = name
+            }
+            keyboardState.recordingIndex = nil
+            recordingKeyUp = code
+            saveKeyboardMappings()
+            keyboardState.feedback = tr("Recorded \(name).", "已录制 \(name)。")
+            return true
+        }
+        if type == .keyUp, let target = activeKeyboardRemaps.removeValue(forKey: code) {
+            postKeyboardKey(target, down: false)
+            return true
+        }
+        if type == .keyDown, let target = activeKeyboardRemaps[code] {
+            postKeyboardKey(target, down: true,
+                            repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+            return true
+        }
+        guard type == .keyDown, keyboardState.enabled,
+              keyboardWindow?.isKeyWindow != true,
+              let frontmost = NSWorkspace.shared.frontmostApplication,
+              let appPath = defaults.string(forKey: "keyboardAppPath") else { return false }
+        let appID = defaults.string(forKey: "keyboardAppID")
+        guard (appID != nil && frontmost.bundleIdentifier == appID) ||
+                frontmost.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: appPath).standardizedFileURL.path
+        else { return false }
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+        guard event.flags.intersection(modifiers).isEmpty else { return false }
+        guard let mapping = keyboardState.mappings.first(where: { $0.source == code && $0.target != nil }),
+              let target = mapping.target else { return false }
+        activeKeyboardRemaps[code] = target
+        postKeyboardKey(target, down: true,
+                        repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+        return true
+    }
+
+    private func postKeyboardKey(_ code: Int, down: Bool, repeatKey: Bool = false) {
+        guard let event = CGEvent(keyboardEventSource: nil,
+                                  virtualKey: CGKeyCode(code), keyDown: down) else { return }
+        event.setIntegerValueField(.eventSourceUserData, value: 0x4D51534B)
+        if repeatKey { event.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
+        event.post(tap: .cghidEventTap)
+    }
+
+    private func keyName(_ code: Int, event: CGEvent) -> String {
+        switch code {
+        case 49: return tr("Space", "空格")
+        case 36: return tr("Return", "回车")
+        case 53: return "Esc"
+        case 48: return "Tab"
+        case 51: return tr("Delete", "删除")
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
+        default:
+            let characters = NSEvent(cgEvent: event)?.charactersIgnoringModifiers ?? ""
+            let value = characters.unicodeScalars.first?.value ?? 0
+            return characters.count == 1 && (33...126).contains(value)
+                ? characters.uppercased() : tr("Key \(code)", "按键 \(code)")
+        }
+    }
+
     @objc private func systemSettingsDidDeactivate(_ notification: Notification) {
-        guard defaults.bool(forKey: "resumeSetupAfterAccess"),
-              let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               app.bundleIdentifier == "com.apple.systempreferences" else { return }
-        DispatchQueue.main.async { self.showSetup() }
+        DispatchQueue.main.async {
+            if self.defaults.bool(forKey: "resumeKeyboardSetupAfterAccess") {
+                self.showKeyboardSetup()
+            } else if self.defaults.bool(forKey: "resumeSetupAfterAccess") {
+                self.showSetup()
+            }
+        }
     }
 
     private func showSetup() {
@@ -480,6 +786,16 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     func windowWillClose(_ notification: Notification) {
+        if (notification.object as? NSWindow) === keyboardWindow {
+            keyboardState.recordingIndex = nil
+            recordingKeyUp = nil
+            keyboardPermissionTimer?.invalidate()
+            keyboardPermissionTimer = nil
+            if keyboardMonitor.isRunning {
+                defaults.removeObject(forKey: "resumeKeyboardSetupAfterAccess")
+            }
+            return
+        }
         permissionTimer?.invalidate()
         permissionTimer = nil
         if monitor.isRunning {
@@ -493,6 +809,11 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     @objc private func quit() {
+        for target in activeKeyboardRemaps.values {
+            postKeyboardKey(target, down: false)
+        }
+        activeKeyboardRemaps.removeAll()
+        keyboardMonitor.stop()
         monitor.stop()
         NSApplication.shared.terminate(nil)
     }

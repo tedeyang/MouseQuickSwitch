@@ -1,4 +1,4 @@
-# mouseQuick requirements
+# MouseQuickSwitch requirements
 
 ## Goal
 
@@ -12,7 +12,7 @@ A native macOS menu-bar utility for mapping one Logitech M585 side button to eit
 - Offer two mutually exclusive, persistent actions: send one Command-Tab shortcut, or activate/launch a selected `.app`.
 - Keep selected-application mode as the default for existing users.
 - Offer a standard application picker, an enable/pause control, permission guidance, and Quit.
-- Migrate recorded button, mode, target, and enabled state from MousePlus on first launch.
+- Migrate recorded button, mode, target, and enabled state from mouseQuick or MousePlus on first launch.
 - Store preferences locally without network access or telemetry.
 
 ## Limits
@@ -24,7 +24,7 @@ A native macOS menu-bar utility for mapping one Logitech M585 side button to eit
 
 ## Acceptance
 
-1. Build and run mouseQuick.app on macOS.
+1. Build and run MouseQuickSwitch.app on macOS.
 2. Record the M585 side button and select Command-Tab mode. Consecutive presses alternate between the two recent applications.
 3. Select application mode and a target `.app`. A press activates or launches that app.
 4. The mapped button no longer performs its old Back/Forward action while mapping is enabled.

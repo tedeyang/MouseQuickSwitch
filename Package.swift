@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "mouseQuick",
+    name: "MouseQuickSwitch",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "mouseQuick", targets: ["mouseQuick"])],
-    targets: [.executableTarget(name: "mouseQuick")],
+    products: [.executable(name: "MouseQuickSwitch", targets: ["MouseQuickSwitch"])],
+    targets: [.executableTarget(name: "MouseQuickSwitch")],
     swiftLanguageModes: [.v5]
 )

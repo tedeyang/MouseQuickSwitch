@@ -1,6 +1,6 @@
-# mouseQuick
+# MouseQuickSwitch
 
-mouseQuick 是一个专为 **macOS + 罗技 M585 鼠标**制作的轻量菜单栏工具。把一个侧键设为应用切换快捷键：按一下模拟 **⌘Tab**，在最近两个应用之间来回切换；也可以选择“打开指定应用”，让侧键每次都切到同一个程序。
+MouseQuickSwitch 是一个专为 **macOS + 罗技 M585 鼠标**制作的轻量菜单栏工具。把一个侧键设为应用切换快捷键：按一下模拟 **⌘Tab**，在最近两个应用之间来回切换；也可以选择“打开指定应用”，让侧键每次都切到同一个程序。
 
 A small macOS menu bar utility for the Logitech M585 mouse. Map a side button to Command-Tab or to a selected application.
 
@@ -17,10 +17,10 @@ A small macOS menu bar utility for the Logitech M585 mouse. Map a side button to
 
 ```sh
 ./scripts/build-app.sh
-open .build/mouseQuick.app
+open .build/MouseQuickSwitch.app
 ```
 
-首次运行时，在 **系统设置 → 隐私与安全性 → 设备控制和数据访问** 中允许 mouseQuick。如果菜单提示需要鼠标输入权限，再到 **输入监控** 中允许它，然后重启应用。构建脚本采用临时签名；重新构建后 macOS 可能要求重新授权。
+首次运行时，在 **系统设置 → 隐私与安全性 → 设备控制和数据访问** 中允许 MouseQuickSwitch。如果菜单提示需要鼠标输入权限，再到 **输入监控** 中允许它，然后重启应用。构建脚本采用临时签名；重新构建后 macOS 可能要求重新授权。
 
 ## 使用
 
@@ -29,7 +29,7 @@ open .build/mouseQuick.app
 3. 若选择指定应用模式，点击 **Select Application…** 选取 `.app`。
 4. 确认 **Mapping Enabled** 已勾选。
 
-从旧版 MousePlus 升级时，mouseQuick 会在首次启动时迁移已录制的按钮、模式和目标应用。由于应用名称和标识已变，需要为 mouseQuick 单独授权。
+从旧版 mouseQuick 或 MousePlus 升级时，MouseQuickSwitch 会在首次启动时迁移已录制的按钮、模式和目标应用。由于应用名称和标识已变，需要为 MouseQuickSwitch 单独授权。
 
 ## 限制
 

@@ -59,7 +59,7 @@ final class MouseMonitor {
     }
 }
 
-final class MouseQuickApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum ActionMode: String {
         case selectedApplication
         case commandTab
@@ -92,7 +92,8 @@ final class MouseQuickApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func migrateLegacySettings() {
         guard defaults.integer(forKey: "settingsMigrationVersion") == 0 else { return }
-        if let legacy = UserDefaults(suiteName: "dev.mouseplus.app") {
+        for domain in ["dev.mousequick.app", "dev.mouseplus.app"] {
+            guard let legacy = UserDefaults(suiteName: domain) else { continue }
             for key in ["enabled", "buttonNumber", "applicationPath", "actionMode"] {
                 if defaults.object(forKey: key) == nil, let value = legacy.object(forKey: key) {
                     defaults.set(value, forKey: key)
@@ -145,7 +146,7 @@ final class MouseQuickApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func openApplication(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            showAlert("Application not found", "Choose the application again from the mouseQuick menu.")
+            showAlert("Application not found", "Choose the application again from the MouseQuickSwitch menu.")
             return
         }
         let configuration = NSWorkspace.OpenConfiguration()
@@ -164,7 +165,7 @@ final class MouseQuickApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func rebuildMenu() {
         menu.removeAllItems()
-        addItem("mouseQuick", action: nil).isEnabled = false
+        addItem("MouseQuickSwitch", action: nil).isEnabled = false
         menu.addItem(.separator())
         let hasAccessibility = AXIsProcessTrusted()
         let status = monitor.isRunning ? "Listening for mouse buttons" :
@@ -191,7 +192,7 @@ final class MouseQuickApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let mapping = addItem("Mapping Enabled", action: #selector(toggleEnabled))
         mapping.state = enabled ? .on : .off
         menu.addItem(.separator())
-        addItem("Quit mouseQuick", action: #selector(quit))
+        addItem("Quit MouseQuickSwitch", action: #selector(quit))
     }
 
     @discardableResult
@@ -270,7 +271,7 @@ struct Main {
     static func main() {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
-        let delegate = MouseQuickApp()
+        let delegate = MouseQuickSwitchApp()
         application.delegate = delegate
         application.run()
     }

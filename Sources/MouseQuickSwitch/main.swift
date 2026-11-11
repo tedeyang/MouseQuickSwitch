@@ -172,14 +172,10 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { [weak self] app, error in
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { [weak self] _, error in
+            guard let error else { return }
             DispatchQueue.main.async {
-                if let error {
-                    self?.showAlert("Could not open application", error.localizedDescription)
-                    return
-                }
-                guard let app else { return }
-                app.activate(options: [.activateAllWindows])
+                self?.showAlert("Could not open application", error.localizedDescription)
             }
         }
     }

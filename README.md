@@ -15,7 +15,7 @@ A small macOS menu bar utility for the Logitech M585 mouse. Map a side button to
 
 应用支持 Apple silicon 和 Intel Mac，要求 macOS 13 或更新版本。正式面向普通用户分发时，需要提供经过 Developer ID 签名和 Apple 公证的 DMG：下载后打开镜像，将 MouseQuickSwitch.app 拖入 **Applications**，再从“应用程序”中启动。
 
-当前仓库尚无 Developer ID 证书，因此没有可供普通用户直接安装的正式发行包。开发者可以使用 Xcode 或 Xcode Command Line Tools 构建本机预览：
+当前仓库尚无 Developer ID 证书，因此没有可供普通用户直接安装的正式发行包。[未公证的预览版 DMG](https://github.com/tedeyang/MouseQuickSwitch/releases/tag/v0.3.0-preview.1) 可供测试，但下载后可能需要在“系统设置 → 隐私与安全性”中手动允许启动。开发者也可以使用 Xcode 或 Xcode Command Line Tools 构建本机预览：
 
 ```sh
 ./scripts/build-app.sh

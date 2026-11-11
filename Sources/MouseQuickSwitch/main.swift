@@ -123,6 +123,9 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.delegate = self
         monitor.onButton = { [weak self] number in self?.handleButton(number) ?? false }
         monitor.onButtonObserved = { [weak self] number in self?.observeButton(number) }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(systemSettingsDidDeactivate(_:)),
+            name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         _ = monitor.start()
         rebuildMenu()
         if buttonNumber == nil || defaults.bool(forKey: "resumeSetupAfterAccess") {
@@ -237,9 +240,7 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         let title = version.map { "MouseQuickSwitch v\($0)" } ?? "MouseQuickSwitch"
         addItem(title, action: nil).isEnabled = false
         menu.addItem(.separator())
-        let setup = addItem(buttonNumber == nil
-                            ? tr("Set Up Side Button…", "设置侧键…")
-                            : tr("Change Side Button…", "更换侧键…"),
+        let setup = addItem(tr("Set Up Mouse Button…", "设置鼠标按键…"),
                             action: #selector(showSetupFromMenu))
         setup.image = NSImage(systemSymbolName: "cursorarrow.click.2", accessibilityDescription: nil)
         if !monitor.isRunning {
@@ -260,10 +261,10 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         }
         menu.addItem(.separator())
         addItem(tr("When I Press It", "按下侧键后"), action: nil).isEnabled = false
-        let commandTab = addItem(tr("Switch to Previous App", "切换到上个应用"),
+        let commandTab = addItem(tr("Switch to Previous App (⌘Tab)", "切换到上一个程序（⌘Tab）"),
                                  action: #selector(selectCommandTabMode))
         commandTab.state = actionMode == .commandTab ? .on : .off
-        let selectedApp = addItem(tr("Open My Chosen App", "打开指定应用"),
+        let selectedApp = addItem(tr("Switch to a Chosen App", "切换到指定程序"),
                                   action: #selector(selectApplicationMode))
         selectedApp.state = actionMode == .selectedApplication ? .on : .off
         menu.addItem(.separator())
@@ -308,10 +309,9 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     @objc private func requestAccess() {
         showSetup()
         defaults.set(true, forKey: "resumeSetupAfterAccess")
-        setupWindow?.level = .floating
         setupState.feedback = tr(
-            "Finish granting access in System Settings, then return to this window.",
-            "请在系统设置中完成授权，再回到这个窗口继续设置。")
+            "Grant access in the system window. This setup window will be ready when you return.",
+            "请在系统弹出的窗口中授权，返回后可继续使用此设置窗口。")
         if !AXIsProcessTrusted() {
             let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
             _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
@@ -372,14 +372,14 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     @objc private func selectCommandTabMode() {
         defaults.set(ActionMode.commandTab.rawValue, forKey: "actionMode")
         refreshSetup()
-        setupState.feedback = tr("Action set: switch to previous app.", "已设置：切换到上个应用。")
+        setupState.feedback = tr("Action set: switch to previous app.", "已设置：切换到上一个程序。")
         rebuildMenu()
     }
 
     @objc private func selectApplicationMode() {
         defaults.set(ActionMode.selectedApplication.rawValue, forKey: "actionMode")
         refreshSetup()
-        setupState.feedback = tr("Action set: open a chosen app.", "已设置：打开指定应用。")
+        setupState.feedback = tr("Action set: switch to a chosen app.", "已设置：切换到指定程序。")
         rebuildMenu()
     }
 
@@ -406,6 +406,13 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc private func showSetupFromMenu() { showSetup() }
 
+    @objc private func systemSettingsDidDeactivate(_ notification: Notification) {
+        guard defaults.bool(forKey: "resumeSetupAfterAccess"),
+              let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.bundleIdentifier == "com.apple.systempreferences" else { return }
+        DispatchQueue.main.async { self.showSetup() }
+    }
+
     private func showSetup() {
         refreshSetup()
         if setupWindow == nil {
@@ -417,10 +424,11 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
                                  selectApp: { [weak self] in self?.selectApplication() },
                                  toggleEnabled: { [weak self] in self?.toggleEnabled() },
                                  requestAccess: { [weak self] in self?.requestAccess() })
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
-                                  styleMask: [.titled, .closable],
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 760),
+                                  styleMask: [.titled, .closable, .resizable],
                                   backing: .buffered, defer: false)
             window.title = "MouseQuickSwitch"
+            window.minSize = NSSize(width: 560, height: 700)
             window.contentView = NSHostingView(rootView: view)
             window.center()
             window.isReleasedWhenClosed = false
@@ -474,7 +482,6 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     func windowWillClose(_ notification: Notification) {
         permissionTimer?.invalidate()
         permissionTimer = nil
-        setupWindow?.level = .normal
         if monitor.isRunning {
             defaults.removeObject(forKey: "resumeSetupAfterAccess")
         }

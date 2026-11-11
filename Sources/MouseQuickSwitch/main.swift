@@ -82,12 +82,33 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateLegacySettings()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "M+"
+        statusItem.button?.image = menuBarIcon()
+        statusItem.button?.toolTip = "MouseQuickSwitch"
         statusItem.menu = menu
         menu.delegate = self
         monitor.onButton = { [weak self] number in self?.handleButton(number) ?? false }
         _ = monitor.start()
         rebuildMenu()
+    }
+
+    private func menuBarIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
+            NSColor.black.setStroke()
+            let body = NSBezierPath(roundedRect: NSRect(x: 6, y: 1.5, width: 11, height: 17),
+                                    xRadius: 5.5, yRadius: 5.5)
+            body.lineWidth = 1.6
+            body.stroke()
+            let wheel = NSBezierPath(roundedRect: NSRect(x: 10.5, y: 11.5, width: 2, height: 4),
+                                     xRadius: 1, yRadius: 1)
+            NSColor.black.setFill()
+            wheel.fill()
+            let sideButton = NSBezierPath(roundedRect: NSRect(x: 3.5, y: 8, width: 4, height: 4),
+                                          xRadius: 1.5, yRadius: 1.5)
+            sideButton.fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 
     private func migrateLegacySettings() {

@@ -1,5 +1,7 @@
 # MouseQuickSwitch
 
+<img src="Assets/AppIcon.png" alt="MouseQuickSwitch app icon" width="128">
+
 MouseQuickSwitch 是一个专为 **macOS + 罗技 M585 鼠标**制作的轻量菜单栏工具。把一个侧键设为应用切换快捷键：按一下模拟 **⌘Tab**，在最近两个应用之间来回切换；也可以选择“打开指定应用”，让侧键每次都切到同一个程序。
 
 A small macOS menu bar utility for the Logitech M585 mouse. Map a side button to Command-Tab or to a selected application.
@@ -34,7 +36,7 @@ NOTARY_PROFILE='mousequickswitch' ./scripts/package-dmg.sh
 
 ## 使用
 
-1. 点击菜单栏中的 **M+**，选择 **Record Side Button**，然后按一下 M585 侧键。
+1. 点击菜单栏中的鼠标图标，选择 **Record Side Button**，然后按一下 M585 侧键。
 2. 在 **On Button Press** 中选择 **Switch Between Apps (⌘Tab)** 或 **Open Selected Application**。
 3. 若选择指定应用模式，点击 **Select Application…** 选取 `.app`。
 4. 确认 **Mapping Enabled** 已勾选。

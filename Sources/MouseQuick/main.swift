@@ -59,7 +59,12 @@ final class MouseMonitor {
     }
 }
 
-final class MousePlusApp: NSObject, NSApplicationDelegate {
+final class MouseQuickApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private enum ActionMode: String {
+        case selectedApplication
+        case commandTab
+    }
+
     private let defaults = UserDefaults.standard
     private let monitor = MouseMonitor()
     private var statusItem: NSStatusItem!
@@ -67,23 +72,38 @@ final class MousePlusApp: NSObject, NSApplicationDelegate {
     private var recording = false
     private var enabled: Bool { defaults.object(forKey: "enabled") as? Bool ?? true }
     private var buttonNumber: Int? { defaults.object(forKey: "buttonNumber") as? Int }
+    private var actionMode: ActionMode {
+        ActionMode(rawValue: defaults.string(forKey: "actionMode") ?? "") ?? .selectedApplication
+    }
     private var appURL: URL? {
         guard let path = defaults.string(forKey: "applicationPath") else { return nil }
         return URL(fileURLWithPath: path)
     }
-    private var switchToCodex: Bool { defaults.bool(forKey: "switchToCodex") }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if defaults.object(forKey: "applicationPath") == nil,
-           FileManager.default.fileExists(atPath: "/Applications/ChatGPT.app") {
-            defaults.set("/Applications/ChatGPT.app", forKey: "applicationPath")
-            defaults.set(true, forKey: "switchToCodex")
-        }
+        migrateLegacySettings()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "M+"
         statusItem.menu = menu
+        menu.delegate = self
         monitor.onButton = { [weak self] number in self?.handleButton(number) ?? false }
         _ = monitor.start()
+        rebuildMenu()
+    }
+
+    private func migrateLegacySettings() {
+        guard defaults.integer(forKey: "settingsMigrationVersion") == 0 else { return }
+        if let legacy = UserDefaults(suiteName: "dev.mouseplus.app") {
+            for key in ["enabled", "buttonNumber", "applicationPath", "actionMode"] {
+                if defaults.object(forKey: key) == nil, let value = legacy.object(forKey: key) {
+                    defaults.set(value, forKey: key)
+                }
+            }
+        }
+        defaults.set(1, forKey: "settingsMigrationVersion")
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if !monitor.isRunning { _ = monitor.start() }
         rebuildMenu()
     }
 
@@ -95,14 +115,37 @@ final class MousePlusApp: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { self.rebuildMenu() }
             return true
         }
-        guard enabled, buttonNumber == number, let url = appURL else { return false }
-        DispatchQueue.main.async { self.openApplication(url) }
+        guard enabled, buttonNumber == number else { return false }
+        switch actionMode {
+        case .commandTab:
+            DispatchQueue.main.async {
+                self.sendCommandTab()
+            }
+        case .selectedApplication:
+            guard let url = appURL else { return false }
+            DispatchQueue.main.async { self.openApplication(url) }
+        }
         return true
+    }
+
+    private func sendCommandTab() {
+        let commandKey: CGKeyCode = 0x37
+        let tabKey: CGKeyCode = 0x30
+        guard let commandDown = CGEvent(keyboardEventSource: nil, virtualKey: commandKey, keyDown: true),
+              let tabDown = CGEvent(keyboardEventSource: nil, virtualKey: tabKey, keyDown: true),
+              let tabUp = CGEvent(keyboardEventSource: nil, virtualKey: tabKey, keyDown: false),
+              let commandUp = CGEvent(keyboardEventSource: nil, virtualKey: commandKey, keyDown: false) else { return }
+        commandDown.flags = .maskCommand
+        tabDown.flags = .maskCommand
+        tabUp.flags = .maskCommand
+        for event in [commandDown, tabDown, tabUp, commandUp] {
+            event.post(tap: .cghidEventTap)
+        }
     }
 
     private func openApplication(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            showAlert("Application not found", "Choose the application again from the MousePlus menu.")
+            showAlert("Application not found", "Choose the application again from the mouseQuick menu.")
             return
         }
         let configuration = NSWorkspace.OpenConfiguration()
@@ -113,46 +156,42 @@ final class MousePlusApp: NSObject, NSApplicationDelegate {
                     self?.showAlert("Could not open application", error.localizedDescription)
                     return
                 }
-                app?.activate(options: [.activateAllWindows])
-                guard self?.switchToCodex == true,
-                      url.lastPathComponent.caseInsensitiveCompare("ChatGPT.app") == .orderedSame else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.sendCodexShortcut() }
+                guard let app else { return }
+                app.activate(options: [.activateAllWindows])
             }
         }
     }
 
-    private func sendCodexShortcut() {
-        // ANSI 3 key. ChatGPT uses Control-3 to select its Codex view.
-        let keyCode: CGKeyCode = 0x14
-        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
-              let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else { return }
-        down.flags = .maskControl
-        up.flags = .maskControl
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-    }
-
     private func rebuildMenu() {
         menu.removeAllItems()
-        addItem("MousePlus", action: nil).isEnabled = false
+        addItem("mouseQuick", action: nil).isEnabled = false
         menu.addItem(.separator())
-        let status = monitor.isRunning ? "Listening for mouse buttons" : "Accessibility permission required"
+        let hasAccessibility = AXIsProcessTrusted()
+        let status = monitor.isRunning ? "Listening for mouse buttons" :
+            (hasAccessibility ? "Mouse input access required" : "Accessibility permission required")
         addItem(status, action: nil).isEnabled = false
-        if !monitor.isRunning { addItem("Grant Accessibility Access…", action: #selector(requestAccess)) }
+        if !monitor.isRunning {
+            addItem(hasAccessibility ? "Request Mouse Input Access…" : "Grant Accessibility Access…",
+                    action: #selector(requestAccess))
+        }
         let description = recording ? "Press the M585 side button now…" :
             (buttonNumber.map { "Recorded button: \($0 + 1)" } ?? "No side button recorded")
         addItem(description, action: nil).isEnabled = false
         addItem(recording ? "Cancel Recording" : "Record Side Button", action: #selector(toggleRecording))
         menu.addItem(.separator())
+        addItem("On Button Press", action: nil).isEnabled = false
+        let commandTab = addItem("Switch Between Apps (⌘Tab)", action: #selector(selectCommandTabMode))
+        commandTab.state = actionMode == .commandTab ? .on : .off
+        let selectedApp = addItem("Open Selected Application", action: #selector(selectApplicationMode))
+        selectedApp.state = actionMode == .selectedApplication ? .on : .off
+        menu.addItem(.separator())
         let target = appURL?.lastPathComponent ?? "None"
         addItem("Target: \(target)", action: nil).isEnabled = false
         addItem("Select Application…", action: #selector(selectApplication))
-        let codex = addItem("Switch to Codex (ChatGPT only)", action: #selector(toggleCodex))
-        codex.state = switchToCodex ? .on : .off
         let mapping = addItem("Mapping Enabled", action: #selector(toggleEnabled))
         mapping.state = enabled ? .on : .off
         menu.addItem(.separator())
-        addItem("Quit MousePlus", action: #selector(quit))
+        addItem("Quit mouseQuick", action: #selector(quit))
     }
 
     @discardableResult
@@ -164,8 +203,12 @@ final class MousePlusApp: NSObject, NSApplicationDelegate {
     }
 
     @objc private func requestAccess() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        if !AXIsProcessTrusted() {
+            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        } else {
+            _ = CGRequestListenEventAccess()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             _ = self.monitor.start()
             self.rebuildMenu()
@@ -194,8 +237,13 @@ final class MousePlusApp: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleCodex() {
-        defaults.set(!switchToCodex, forKey: "switchToCodex")
+    @objc private func selectCommandTabMode() {
+        defaults.set(ActionMode.commandTab.rawValue, forKey: "actionMode")
+        rebuildMenu()
+    }
+
+    @objc private func selectApplicationMode() {
+        defaults.set(ActionMode.selectedApplication.rawValue, forKey: "actionMode")
         rebuildMenu()
     }
 
@@ -222,7 +270,7 @@ struct Main {
     static func main() {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
-        let delegate = MousePlusApp()
+        let delegate = MouseQuickApp()
         application.delegate = delegate
         application.run()
     }

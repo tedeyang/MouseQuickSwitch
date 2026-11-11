@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "MousePlus",
+    name: "mouseQuick",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "MousePlus", targets: ["MousePlus"])],
-    targets: [.executableTarget(name: "MousePlus")],
+    products: [.executable(name: "mouseQuick", targets: ["mouseQuick"])],
+    targets: [.executableTarget(name: "mouseQuick")],
     swiftLanguageModes: [.v5]
 )

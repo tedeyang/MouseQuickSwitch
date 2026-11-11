@@ -12,7 +12,7 @@ if [[ -n "${CODESIGN_IDENTITY:-}" || -n "${NOTARY_PROFILE:-}" ]]; then
 fi
 
 ./scripts/build-app.sh
-app_dir="$PWD/.build/MouseQuickSwitch.app"
+app_dir="$PWD/build/MouseQuickSwitch.app"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_dir/Contents/Info.plist")
 
 if [[ "$signed" == true ]]; then
@@ -20,10 +20,10 @@ if [[ "$signed" == true ]]; then
         echo "The app is not signed with a Developer ID Application certificate." >&2
         exit 2
     fi
-    dmg="$PWD/.build/MouseQuickSwitch-$version-PENDING-NOTARIZATION.dmg"
-    release_dmg="$PWD/.build/MouseQuickSwitch-$version.dmg"
+    dmg="$PWD/build/MouseQuickSwitch-$version-PENDING-NOTARIZATION.dmg"
+    release_dmg="$PWD/build/MouseQuickSwitch-$version.dmg"
 else
-    dmg="$PWD/.build/MouseQuickSwitch-$version-UNNOTARIZED-PREVIEW.dmg"
+    dmg="$PWD/build/MouseQuickSwitch-$version-UNNOTARIZED-PREVIEW.dmg"
 fi
 
 staging=$(mktemp -d "${TMPDIR:-/private/tmp}/mousequickswitch-dmg.XXXXXX")
@@ -33,7 +33,7 @@ ln -s /Applications "$staging/Applications"
 hdiutil create -volname MouseQuickSwitch -srcfolder "$staging" -ov -format UDZO "$dmg"
 
 if [[ "$signed" == true ]]; then
-    result="$PWD/.build/notary-result.json"
+    result="$PWD/build/notary-result.json"
     xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json > "$result"
     python3 - "$result" <<'PY'
 import json, sys

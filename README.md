@@ -19,7 +19,7 @@ A small macOS menu bar utility for the Logitech M585 mouse. Map a side button to
 
 ```sh
 ./scripts/build-app.sh
-open .build/MouseQuickSwitch.app
+open build/MouseQuickSwitch.app
 ./scripts/package-dmg.sh  # 仅生成未公证的本地预览 DMG
 ```
 

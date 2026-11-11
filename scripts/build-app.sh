@@ -7,13 +7,13 @@ export CLANG_MODULE_CACHE_PATH="$module_cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$module_cache"
 for arch in arm64 x86_64; do
     swift build --disable-sandbox -debug-info-format none -c release \
-        --triple "$arch-apple-macosx13.0" --scratch-path ".build/$arch"
+        --triple "$arch-apple-macosx13.0" --scratch-path "build/$arch"
 done
-app_dir="$PWD/.build/MouseQuickSwitch.app"
+app_dir="$PWD/build/MouseQuickSwitch.app"
 mkdir -p "$app_dir/Contents/MacOS"
 xcrun lipo -create \
-    .build/arm64/release/MouseQuickSwitch \
-    .build/x86_64/release/MouseQuickSwitch \
+    build/arm64/release/MouseQuickSwitch \
+    build/x86_64/release/MouseQuickSwitch \
     -output "$app_dir/Contents/MacOS/MouseQuickSwitch"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

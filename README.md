@@ -11,16 +11,26 @@ A small macOS menu bar utility for the Logitech M585 mouse. Map a side button to
 - 拦截被映射的侧键，避免同时触发原有的前进或后退操作；暂停或退出后恢复原行为。
 - 设置保存在本机的 macOS 用户偏好中；无网络请求、遥测或鼠标驱动。
 
-## 构建与运行
+## 安装与构建
 
-需要 macOS 13 或更新版本，以及 Xcode 或 Xcode Command Line Tools。
+应用支持 Apple silicon 和 Intel Mac，要求 macOS 13 或更新版本。正式面向普通用户分发时，需要提供经过 Developer ID 签名和 Apple 公证的 DMG：下载后打开镜像，将 MouseQuickSwitch.app 拖入 **Applications**，再从“应用程序”中启动。
+
+当前仓库尚无 Developer ID 证书，因此没有可供普通用户直接安装的正式发行包。开发者可以使用 Xcode 或 Xcode Command Line Tools 构建本机预览：
 
 ```sh
 ./scripts/build-app.sh
 open .build/MouseQuickSwitch.app
+./scripts/package-dmg.sh  # 仅生成未公证的本地预览 DMG
 ```
 
-首次运行时，在 **系统设置 → 隐私与安全性 → 设备控制和数据访问** 中允许 MouseQuickSwitch。如果菜单提示需要鼠标输入权限，再到 **输入监控** 中允许它，然后重启应用。构建脚本采用临时签名；重新构建后 macOS 可能要求重新授权。
+取得 Developer ID Application 证书并在本机配置 `notarytool` 钥匙串凭据后，可以用以下命令生成公证 DMG。脚本只有在 Apple 接受公证并成功附加票据后，才会产生没有 `PENDING` 字样的正式文件：
+
+```sh
+CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+NOTARY_PROFILE='mousequickswitch' ./scripts/package-dmg.sh
+```
+
+首次运行时，在 **系统设置 → 隐私与安全性 → 设备控制和数据访问** 中允许 MouseQuickSwitch。如果菜单提示需要鼠标输入权限，再到 **输入监控** 中允许它，然后重启应用。开发预览采用临时签名，重新构建后 macOS 可能要求重新授权。
 
 ## 使用
 

@@ -3,7 +3,9 @@ import SwiftUI
 final class SetupState: ObservableObject {
     @Published var chinese = false
     @Published var detected = false
+    @Published var slot = 0
     @Published var buttonNumber: Int?
+    @Published var otherButtonNumber: Int?
     @Published var recording = false
     @Published var canListen = false
     @Published var hasAccessibility = false
@@ -20,6 +22,7 @@ final class SetupState: ObservableObject {
 
 struct SetupView: View {
     @ObservedObject var state: SetupState
+    let selectSlot: (Int) -> Void
     let chooseButton: (Int) -> Void
     let record: () -> Void
     let switchApps: () -> Void
@@ -29,9 +32,17 @@ struct SetupView: View {
     let requestAccess: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-                Text(state.text("Make your side button useful", "让鼠标侧键更顺手"))
+        VStack(alignment: .leading, spacing: 10) {
+                Text(state.text("Set up your mouse buttons", "设置鼠标侧键"))
                     .font(.title2.bold())
+
+                Picker(state.text("Button to configure", "要设置的侧键"),
+                       selection: Binding(get: { state.slot }, set: { selectSlot($0) })) {
+                    Text(state.text("Button 1", "侧键 1")).tag(0)
+                    Text(state.text("Button 2", "侧键 2")).tag(1)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel(state.text("Button to configure", "要设置的侧键"))
 
                 if !state.canListen {
                     VStack(alignment: .leading, spacing: 8) {
@@ -71,7 +82,7 @@ struct SetupView: View {
 
                 Divider()
 
-                Text(state.text("1. Choose the side button", "1. 选择侧键"))
+                Text(state.text("1. Choose a physical button", "1. 选择鼠标上的按键"))
                     .font(.headline)
                 HStack(alignment: .center, spacing: 16) {
                     mouseDiagram
@@ -81,9 +92,9 @@ struct SetupView: View {
                                             "无需录制：直接选择要使用的侧键。"))
                                 .fixedSize(horizontal: false, vertical: true)
                             Button(state.text("Back button", "后退键")) { chooseButton(3) }
-                                .disabled(!state.canListen)
+                                .disabled(!state.canListen || state.otherButtonNumber == 3)
                             Button(state.text("Forward button", "前进键")) { chooseButton(4) }
-                                .disabled(!state.canListen)
+                                .disabled(!state.canListen || state.otherButtonNumber == 4)
                         } else {
                             Text(state.text("Press the side button once to identify it.",
                                             "按一下要使用的侧键，即可完成识别。"))
@@ -94,6 +105,12 @@ struct SetupView: View {
                                : state.text("Record by pressing a button…", "按下侧键录制…"),
                                action: record)
                             .disabled(!state.canListen)
+                        if let other = state.otherButtonNumber {
+                            Text(state.text("Button \(other + 1) is already used by Button \(2 - state.slot).",
+                                            "按键 \(other + 1) 已分配给侧键 \(2 - state.slot)。"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -113,7 +130,7 @@ struct SetupView: View {
 
                 Divider()
 
-                Text(state.text("2. What should it do?", "2. 按下后执行什么？"))
+                Text(state.text("2. What should this button do?", "2. 这个侧键按下后做什么？"))
                     .font(.headline)
                 actionChoice(
                     title: state.text("Switch to previous app", "切换到上一个程序"),
@@ -134,7 +151,7 @@ struct SetupView: View {
                            action: selectApp)
                         .disabled(state.buttonNumber == nil)
                 }
-                Toggle(state.text("Enable side button action", "启用侧键功能"),
+                Toggle(state.text("Enable this button", "启用此侧键"),
                        isOn: Binding(get: { state.enabled }, set: { _ in toggleEnabled() }))
                     .disabled(state.buttonNumber == nil)
                 Text(state.text("Test detection here. Close this window to use the chosen action.",
@@ -170,13 +187,24 @@ struct SetupView: View {
 
     private var buttonStatus: String {
         if state.recording {
-            return state.text("Waiting for your side-button press…", "正在等待你按下侧键…")
+            return state.text("Waiting for Button \(state.slot + 1)…",
+                              "正在录制侧键 \(state.slot + 1)…")
         }
         if let number = state.buttonNumber {
-            return state.text("Button \(number + 1) is ready. Try it now.",
-                              "侧键 \(number + 1) 已设置，试按一下。")
+            let name = physicalButtonName(number)
+            return state.text("Button \(state.slot + 1): \(name) is ready. Try it now.",
+                              "侧键 \(state.slot + 1)：\(name)已设置，试按一下。")
         }
-        return state.text("No side button selected yet", "尚未选择侧键")
+        return state.text("Button \(state.slot + 1) is not set yet",
+                          "侧键 \(state.slot + 1) 尚未设置")
+    }
+
+    private func physicalButtonName(_ number: Int) -> String {
+        switch number {
+        case 3: return state.text("Back button", "后退键")
+        case 4: return state.text("Forward button", "前进键")
+        default: return state.text("physical button \(number + 1)", "鼠标按键 \(number + 1)")
+        }
     }
 
     private var mouseDiagram: some View {

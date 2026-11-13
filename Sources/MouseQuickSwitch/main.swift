@@ -21,7 +21,7 @@ final class MouseMonitor {
     var onButtonObserved: ((Int) -> Void)?
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var suppressedButtonUp: Int?
+    private var suppressedButtonUps: Set<Int> = []
 
     var isRunning: Bool { tap != nil }
 
@@ -43,8 +43,7 @@ final class MouseMonitor {
                 guard type == .otherMouseDown || type == .otherMouseUp else { return Unmanaged.passUnretained(event) }
                 let number = Int(event.getIntegerValueField(.mouseEventButtonNumber))
                 if type == .otherMouseUp {
-                    if monitor.suppressedButtonUp == number {
-                        monitor.suppressedButtonUp = nil
+                    if monitor.suppressedButtonUps.remove(number) != nil {
                         return nil
                     }
                     return Unmanaged.passUnretained(event)
@@ -52,7 +51,7 @@ final class MouseMonitor {
                 let handled = monitor.onButton?(number) == true
                 monitor.onButtonObserved?(number)
                 if handled {
-                    monitor.suppressedButtonUp = number
+                    monitor.suppressedButtonUps.insert(number)
                     return nil
                 }
                 return Unmanaged.passUnretained(event)
@@ -72,6 +71,7 @@ final class MouseMonitor {
         if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
         runLoopSource = nil
+        suppressedButtonUps.removeAll()
     }
 }
 
@@ -101,6 +101,7 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var permissionTimer: Timer?
     private let setupState = SetupState()
     private var recording = false
+    private var selectedMouseSlot = 0
     private var languagePreference: Language {
         Language(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
     }
@@ -111,13 +112,19 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func tr(_ english: String, _ chinese: String) -> String {
         language == .chinese ? chinese : english
     }
-    private var enabled: Bool { defaults.object(forKey: "enabled") as? Bool ?? true }
-    private var buttonNumber: Int? { defaults.object(forKey: "buttonNumber") as? Int }
-    private var actionMode: ActionMode {
-        ActionMode(rawValue: defaults.string(forKey: "actionMode") ?? "") ?? .selectedApplication
+    private func mouseKey(_ name: String, slot: Int) -> String { slot == 0 ? name : name + "2" }
+    private func enabled(for slot: Int) -> Bool {
+        defaults.object(forKey: mouseKey("enabled", slot: slot)) as? Bool ?? true
     }
-    private var appURL: URL? {
-        guard let path = defaults.string(forKey: "applicationPath") else { return nil }
+    private func buttonNumber(for slot: Int) -> Int? {
+        defaults.object(forKey: mouseKey("buttonNumber", slot: slot)) as? Int
+    }
+    private func actionMode(for slot: Int) -> ActionMode {
+        ActionMode(rawValue: defaults.string(forKey: mouseKey("actionMode", slot: slot)) ?? "")
+            ?? (slot == 0 ? .selectedApplication : .commandTab)
+    }
+    private func appURL(for slot: Int) -> URL? {
+        guard let path = defaults.string(forKey: mouseKey("applicationPath", slot: slot)) else { return nil }
         return URL(fileURLWithPath: path)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -140,7 +147,7 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         if keyboardState.enabled { _ = keyboardMonitor.start() }
         refreshKeyboardSetup()
         rebuildMenu()
-        if buttonNumber == nil || defaults.bool(forKey: "resumeSetupAfterAccess") {
+        if buttonNumber(for: 0) == nil || defaults.bool(forKey: "resumeSetupAfterAccess") {
             DispatchQueue.main.async { self.showSetup() }
         }
         if defaults.bool(forKey: "resumeKeyboardSetupAfterAccess") {
@@ -203,23 +210,20 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func handleButton(_ number: Int) -> Bool {
         guard number >= 3 else { return false }
         if recording {
-            defaults.set(number, forKey: "buttonNumber")
             recording = false
-            DispatchQueue.main.async {
-                self.refreshSetup()
-                self.rebuildMenu()
-            }
+            DispatchQueue.main.async { self.chooseButton(number) }
             return true
         }
-        guard enabled, buttonNumber == number else { return false }
-        if setupWindow?.isKeyWindow == true { return true }
-        switch actionMode {
+        guard let slot = (0..<2).first(where: { buttonNumber(for: $0) == number && enabled(for: $0) })
+        else { return false }
+        if setupWindow?.isVisible == true { return true }
+        switch actionMode(for: slot) {
         case .commandTab:
             DispatchQueue.main.async {
                 self.sendCommandTab()
             }
         case .selectedApplication:
-            guard let url = appURL else { return false }
+            guard let url = appURL(for: slot) else { return false }
             DispatchQueue.main.async { self.openApplication(url) }
         }
         return true
@@ -264,49 +268,58 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         addItem(title, action: nil).isEnabled = false
         menu.addItem(.separator())
 
-        addItem(tr("Mouse Button", "鼠标按键"), action: nil).isEnabled = false
-        addItem(tr("Set Up Mouse Button…", "设置鼠标按键…"),
+        addItem(tr("Mouse Buttons", "鼠标按键"), action: nil).isEnabled = false
+        addItem(tr("Set Up Mouse Buttons…", "设置鼠标按键…"),
                 action: #selector(showSetupFromMenu)).indentationLevel = 1
-        let buttonDescription = recording ? tr("Press a side button now…", "请按下要使用的侧键…") :
-            (buttonNumber.map { tr("Button \($0 + 1) selected", "已选择侧键 \($0 + 1)") } ??
-                tr("No button selected", "尚未选择按键"))
-        let buttonStatus = addItem(buttonDescription, action: nil)
-        buttonStatus.isEnabled = false
-        buttonStatus.indentationLevel = 1
-        if recording {
-            addItem(tr("Cancel Recording", "取消录制"),
-                    action: #selector(toggleRecording)).indentationLevel = 1
-        }
         if !monitor.isRunning {
             let hasAccessibility = AXIsProcessTrusted()
             addItem(hasAccessibility ? tr("Request Mouse Input Access…", "请求鼠标输入权限…") :
                         tr("Grant Accessibility Access…", "授予辅助功能权限…"),
                     action: #selector(requestAccess)).indentationLevel = 1
         }
-        let actionTitle = actionMode == .commandTab
-            ? tr("Action: Previous App", "动作：切换到上一个程序")
-            : tr("Action: Chosen App", "动作：切换到指定程序")
-        let actionMenuItem = addItem(actionTitle, action: nil)
-        actionMenuItem.indentationLevel = 1
-        let actionMenu = NSMenu()
-        let commandTab = addItem(tr("Switch to Previous App (⌘Tab)", "切换到上一个程序（⌘Tab）"),
-                                 action: #selector(selectCommandTabMode), to: actionMenu)
-        commandTab.state = actionMode == .commandTab ? .on : .off
-        let selectedApp = addItem(tr("Switch to a Chosen App", "切换到指定程序"),
-                                  action: #selector(selectApplicationMode), to: actionMenu)
-        selectedApp.state = actionMode == .selectedApplication ? .on : .off
-        actionMenuItem.submenu = actionMenu
-        if actionMode == .selectedApplication {
-            let target = appURL?.lastPathComponent ?? tr("None", "未选择")
-            let targetItem = addItem(tr("Chosen app: \(target)", "指定程序：\(target)"), action: nil)
-            targetItem.isEnabled = false
-            targetItem.indentationLevel = 1
-            addItem(tr("Choose App…", "选择程序…"),
-                    action: #selector(selectApplication)).indentationLevel = 1
+        for slot in 0..<2 {
+            let name = buttonNumber(for: slot).map { mouseButtonName($0) }
+                ?? tr("Not set", "未设置")
+            let action = actionMode(for: slot) == .commandTab
+                ? tr("Previous App", "上一个程序")
+                : (appURL(for: slot)?.lastPathComponent ?? tr("Choose App", "选择程序"))
+            let suffix = enabled(for: slot) ? "" : tr(" (Paused)", "（已暂停）")
+            let title = buttonNumber(for: slot) == nil
+                ? tr("Button \(slot + 1): Not set", "侧键 \(slot + 1)：未设置")
+                : tr("Button \(slot + 1): \(name) → \(action)\(suffix)",
+                     "侧键 \(slot + 1)：\(name) → \(action)\(suffix)")
+            let parent = addItem(title, action: nil)
+            parent.indentationLevel = 1
+            let submenu = NSMenu()
+            let setup = addItem(tr("Set Up This Button…", "设置此侧键…"),
+                                action: #selector(showMouseSlotFromMenu(_:)), to: submenu)
+            setup.representedObject = slot
+            submenu.addItem(.separator())
+            let commandTab = addItem(tr("Switch to Previous App (⌘Tab)", "切换到上一个程序（⌘Tab）"),
+                                     action: #selector(selectCommandTabFromMenu(_:)), to: submenu)
+            commandTab.representedObject = slot
+            commandTab.state = actionMode(for: slot) == .commandTab ? .on : .off
+            let selectedApp = addItem(tr("Switch to a Chosen App", "切换到指定程序"),
+                                      action: #selector(selectApplicationModeFromMenu(_:)), to: submenu)
+            selectedApp.representedObject = slot
+            selectedApp.state = actionMode(for: slot) == .selectedApplication ? .on : .off
+            if actionMode(for: slot) == .selectedApplication {
+                let target = appURL(for: slot)?.lastPathComponent ?? tr("None", "未选择")
+                let targetItem = addItem(tr("Chosen app: \(target)", "指定程序：\(target)"),
+                                         action: nil, to: submenu)
+                targetItem.isEnabled = false
+                let choose = addItem(tr("Choose App…", "选择程序…"),
+                                     action: #selector(selectApplicationFromMenu(_:)), to: submenu)
+                choose.representedObject = slot
+            }
+            submenu.addItem(.separator())
+            let toggle = addItem(tr("Enable This Button", "启用此侧键"),
+                                 action: #selector(toggleMouseSlotFromMenu(_:)), to: submenu)
+            toggle.representedObject = slot
+            toggle.state = enabled(for: slot) ? .on : .off
+            toggle.isEnabled = buttonNumber(for: slot) != nil
+            parent.submenu = submenu
         }
-        let mapping = addItem(tr("Enable Side Button Action", "启用侧键功能"), action: #selector(toggleEnabled))
-        mapping.state = enabled ? .on : .off
-        mapping.indentationLevel = 1
 
         menu.addItem(.separator())
         addItem(tr("Keyboard Mappings", "键盘映射"), action: nil).isEnabled = false
@@ -416,7 +429,7 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         panel.canChooseFiles = true
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         if panel.runModal() == .OK, let url = panel.url {
-            defaults.set(url.path, forKey: "applicationPath")
+            defaults.set(url.path, forKey: mouseKey("applicationPath", slot: selectedMouseSlot))
             refreshSetup()
             setupState.feedback = tr("Chosen app: \(url.lastPathComponent)",
                                      "已选择应用：\(url.lastPathComponent)")
@@ -425,23 +438,25 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     @objc private func selectCommandTabMode() {
-        defaults.set(ActionMode.commandTab.rawValue, forKey: "actionMode")
+        defaults.set(ActionMode.commandTab.rawValue, forKey: mouseKey("actionMode", slot: selectedMouseSlot))
         refreshSetup()
         setupState.feedback = tr("Action set: switch to previous app.", "已设置：切换到上一个程序。")
         rebuildMenu()
     }
 
     @objc private func selectApplicationMode() {
-        defaults.set(ActionMode.selectedApplication.rawValue, forKey: "actionMode")
+        defaults.set(ActionMode.selectedApplication.rawValue,
+                     forKey: mouseKey("actionMode", slot: selectedMouseSlot))
         refreshSetup()
         setupState.feedback = tr("Action set: switch to a chosen app.", "已设置：切换到指定程序。")
         rebuildMenu()
     }
 
     @objc private func toggleEnabled() {
-        defaults.set(!enabled, forKey: "enabled")
+        defaults.set(!enabled(for: selectedMouseSlot),
+                     forKey: mouseKey("enabled", slot: selectedMouseSlot))
         refreshSetup()
-        setupState.feedback = enabled
+        setupState.feedback = enabled(for: selectedMouseSlot)
             ? tr("Side button action enabled.", "已启用侧键功能。")
             : tr("Side button action paused.", "已暂停侧键功能。")
         rebuildMenu()
@@ -460,6 +475,54 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     @objc private func showSetupFromMenu() { showSetup() }
+
+    private func mouseButtonName(_ number: Int) -> String {
+        switch number {
+        case 3: return tr("Back button", "后退键")
+        case 4: return tr("Forward button", "前进键")
+        default: return tr("Button \(number + 1)", "按键 \(number + 1)")
+        }
+    }
+
+    private func selectMouseSlot(_ slot: Int) {
+        guard (0..<2).contains(slot) else { return }
+        selectedMouseSlot = slot
+        recording = false
+        setupState.lastPressedButton = nil
+        setupState.feedback = nil
+        refreshSetup()
+        rebuildMenu()
+    }
+
+    @objc private func showMouseSlotFromMenu(_ sender: NSMenuItem) {
+        guard let slot = sender.representedObject as? Int else { return }
+        selectMouseSlot(slot)
+        showSetup()
+    }
+
+    @objc private func selectCommandTabFromMenu(_ sender: NSMenuItem) {
+        guard let slot = sender.representedObject as? Int else { return }
+        selectMouseSlot(slot)
+        selectCommandTabMode()
+    }
+
+    @objc private func selectApplicationModeFromMenu(_ sender: NSMenuItem) {
+        guard let slot = sender.representedObject as? Int else { return }
+        selectMouseSlot(slot)
+        selectApplicationMode()
+    }
+
+    @objc private func selectApplicationFromMenu(_ sender: NSMenuItem) {
+        guard let slot = sender.representedObject as? Int else { return }
+        selectMouseSlot(slot)
+        selectApplication()
+    }
+
+    @objc private func toggleMouseSlotFromMenu(_ sender: NSMenuItem) {
+        guard let slot = sender.representedObject as? Int else { return }
+        selectMouseSlot(slot)
+        toggleEnabled()
+    }
 
     @objc private func showKeyboardSetupFromMenu() { showKeyboardSetup() }
 
@@ -723,6 +786,7 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         refreshSetup()
         if setupWindow == nil {
             let view = SetupView(state: setupState,
+                                 selectSlot: { [weak self] slot in self?.selectMouseSlot(slot) },
                                  chooseButton: { [weak self] number in self?.chooseButton(number) },
                                  record: { [weak self] in self?.toggleRecording() },
                                  switchApps: { [weak self] in self?.selectCommandTabMode() },
@@ -747,13 +811,24 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private func chooseButton(_ number: Int) {
-        defaults.set(number, forKey: "buttonNumber")
+        guard number >= 3 else { return }
+        if let other = (0..<2).first(where: {
+            $0 != selectedMouseSlot && buttonNumber(for: $0) == number
+        }) {
+            recording = false
+            refreshSetup()
+            setupState.feedback = tr(
+                "This button is already assigned to Button \(other + 1). Choose another button.",
+                "这个按键已分配给侧键 \(other + 1)，请选择其他按键。")
+            rebuildMenu()
+            return
+        }
+        defaults.set(number, forKey: mouseKey("buttonNumber", slot: selectedMouseSlot))
         recording = false
         refreshSetup()
         setupState.lastPressedButton = nil
-        setupState.feedback = number == 3
-            ? tr("Back button selected. Press it to check detection.", "已选择后退键。按一下，确认能否检测到。")
-            : tr("Forward button selected. Press it to check detection.", "已选择前进键。按一下，确认能否检测到。")
+        setupState.feedback = tr("\(mouseButtonName(number)) selected. Press it to check detection.",
+                                 "已选择\(mouseButtonName(number))。按一下，确认能否检测到。")
         rebuildMenu()
     }
 
@@ -761,10 +836,14 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
         guard setupWindow?.isVisible == true, number >= 3 else { return }
         DispatchQueue.main.async {
             self.setupState.lastPressedButton = number
-            if self.buttonNumber == number {
+            if self.buttonNumber(for: self.selectedMouseSlot) == number {
                 self.setupState.feedback = self.tr(
                     "Detected button \(number + 1) — this is your chosen button.",
                     "检测到侧键 \(number + 1)，与当前选择一致。")
+            } else if self.buttonNumber(for: 1 - self.selectedMouseSlot) == number {
+                self.setupState.feedback = self.tr(
+                    "Detected button \(number + 1), already assigned to Button \(2 - self.selectedMouseSlot).",
+                    "检测到侧键 \(number + 1)，已分配给侧键 \(2 - self.selectedMouseSlot)。")
             } else {
                 self.setupState.feedback = self.tr(
                     "Detected button \(number + 1). Use “Record by pressing a button” to choose it.",
@@ -776,13 +855,15 @@ final class MouseQuickSwitchApp: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func refreshSetup() {
         setupState.chinese = language == .chinese
         setupState.detected = detectedM585()
-        setupState.buttonNumber = buttonNumber
+        setupState.slot = selectedMouseSlot
+        setupState.buttonNumber = buttonNumber(for: selectedMouseSlot)
+        setupState.otherButtonNumber = buttonNumber(for: 1 - selectedMouseSlot)
         setupState.recording = recording
         setupState.canListen = monitor.isRunning
         setupState.hasAccessibility = AXIsProcessTrusted()
-        setupState.switchApps = actionMode == .commandTab
-        setupState.targetName = appURL?.lastPathComponent
-        setupState.enabled = enabled
+        setupState.switchApps = actionMode(for: selectedMouseSlot) == .commandTab
+        setupState.targetName = appURL(for: selectedMouseSlot)?.lastPathComponent
+        setupState.enabled = enabled(for: selectedMouseSlot)
     }
 
     func windowWillClose(_ notification: Notification) {
